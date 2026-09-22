@@ -1,3 +1,5 @@
+require("dotenv").config();
+
 const fs = require("fs");
 const path = require("path");
 const express = require("express");
@@ -15,7 +17,32 @@ if (!fs.existsSync(CREDENTIALS_PATH)) {
   process.exit(1);
 }
 
-const credentials = JSON.parse(fs.readFileSync(CREDENTIALS_PATH, "utf-8"));
+function resolveEnvPlaceholders(value) {
+  if (Array.isArray(value)) {
+    return value.map(resolveEnvPlaceholders);
+  }
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value).map(([k, v]) => [k, resolveEnvPlaceholders(v)]),
+    );
+  }
+  if (typeof value === "string" && value.startsWith("process.env.")) {
+    const envKey = value.slice("process.env.".length);
+    const envValue = process.env[envKey];
+    if (!envValue) {
+      console.error(
+        `Missing environment variable "${envKey}" referenced in credentials.json.`,
+      );
+      process.exit(1);
+    }
+    return envValue;
+  }
+  return value;
+}
+
+const credentials = resolveEnvPlaceholders(
+  JSON.parse(fs.readFileSync(CREDENTIALS_PATH, "utf-8")),
+);
 const { client_id, client_secret, redirect_uris } =
   credentials.web || credentials.installed;
 const redirectUri =
