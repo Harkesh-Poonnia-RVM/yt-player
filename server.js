@@ -5,16 +5,23 @@ const path = require("path");
 const express = require("express");
 const { google } = require("googleapis");
 
-const PORT = 3000;
+const PORT = process.env.PORT || 3000;
 const CREDENTIALS_PATH = path.join(__dirname, "credentials.json");
 const TOKEN_PATH = path.join(__dirname, "token.json");
 const SCOPES = ["https://www.googleapis.com/auth/youtube.readonly"];
 
-if (!fs.existsSync(CREDENTIALS_PATH)) {
-  console.error(
-    "Missing credentials.json. See README instructions in the chat for how to create it.",
-  );
-  process.exit(1);
+// For Vercel: store token in memory instead of file
+let tokenCache = {};
+
+// Load credentials from environment variable on Vercel
+function getCredentials() {
+  if (process.env.YOUTUBE_CREDENTIALS) {
+    return JSON.parse(process.env.YOUTUBE_CREDENTIALS);
+  }
+  if (fs.existsSync(CREDENTIALS_PATH)) {
+    return JSON.parse(fs.readFileSync(CREDENTIALS_PATH, "utf-8"));
+  }
+  throw new Error("Missing YouTube credentials");
 }
 
 function resolveEnvPlaceholders(value) {
@@ -31,7 +38,7 @@ function resolveEnvPlaceholders(value) {
     const envValue = process.env[envKey];
     if (!envValue) {
       console.error(
-        `Missing environment variable "${envKey}" referenced in credentials.json.`,
+        `Missing environment variable "${envKey}" referenced in credentials.`,
       );
       process.exit(1);
     }
@@ -40,14 +47,12 @@ function resolveEnvPlaceholders(value) {
   return value;
 }
 
-const credentials = resolveEnvPlaceholders(
-  JSON.parse(fs.readFileSync(CREDENTIALS_PATH, "utf-8")),
-);
-const { client_id, client_secret, redirect_uris } =
+const credentials = resolveEnvPlaceholders(getCredentials());
+const { client_id, client_secret } =
   credentials.web || credentials.installed;
-const redirectUri =
-  (redirect_uris && redirect_uris[0]) ||
-  `http://localhost:${PORT}/oauth2callback`;
+
+// Use Vercel URL for OAuth2 callback
+const redirectUri = process.env.REDIRECT_URI
 
 const oauth2Client = new google.auth.OAuth2(
   client_id,
@@ -55,19 +60,25 @@ const oauth2Client = new google.auth.OAuth2(
   redirectUri,
 );
 
-// Load token if it already exists, so we don't have to re-auth every run.
+// Load token from cache or file
 if (fs.existsSync(TOKEN_PATH)) {
-  const token = JSON.parse(fs.readFileSync(TOKEN_PATH, "utf-8"));
-  oauth2Client.setCredentials(token);
+  try {
+    tokenCache = JSON.parse(fs.readFileSync(TOKEN_PATH, "utf-8"));
+    oauth2Client.setCredentials(tokenCache);
+  } catch (err) {
+    console.log("Could not load token file");
+  }
 }
 
-// Persist refreshed tokens whenever the client refreshes them.
+// Persist refreshed tokens
 oauth2Client.on("tokens", (tokens) => {
-  const existing = fs.existsSync(TOKEN_PATH)
-    ? JSON.parse(fs.readFileSync(TOKEN_PATH, "utf-8"))
-    : {};
-  const merged = { ...existing, ...tokens };
-  fs.writeFileSync(TOKEN_PATH, JSON.stringify(merged, null, 2));
+  tokenCache = { ...tokenCache, ...tokens };
+  // Try to save to file (works locally, ignored on Vercel)
+  try {
+    fs.writeFileSync(TOKEN_PATH, JSON.stringify(tokenCache, null, 2));
+  } catch (err) {
+    console.log("Token file write skipped (expected on Vercel)");
+  }
 });
 
 function isAuthenticated() {
@@ -99,7 +110,13 @@ app.get("/oauth2callback", async (req, res) => {
   try {
     const { tokens } = await oauth2Client.getToken(code);
     oauth2Client.setCredentials(tokens);
-    fs.writeFileSync(TOKEN_PATH, JSON.stringify(tokens, null, 2));
+    tokenCache = tokens;
+    // Try to persist
+    try {
+      fs.writeFileSync(TOKEN_PATH, JSON.stringify(tokens, null, 2));
+    } catch (err) {
+      console.log("Token persistence skipped");
+    }
     res.redirect("/");
   } catch (err) {
     console.error("OAuth callback error:", err);
@@ -121,7 +138,6 @@ app.get("/api/videos", async (req, res) => {
   try {
     const youtube = google.youtube({ version: "v3", auth: oauth2Client });
 
-    // Find the authenticated user's channel and its uploads playlist.
     const channelResp = await youtube.channels.list({
       part: ["contentDetails"],
       mine: true,
@@ -136,7 +152,6 @@ app.get("/api/videos", async (req, res) => {
 
     const uploadsPlaylistId = channel.contentDetails.relatedPlaylists.uploads;
 
-    // Get the uploaded videos from that playlist.
     const playlistResp = await youtube.playlistItems.list({
       part: ["snippet"],
       playlistId: uploadsPlaylistId,
@@ -151,7 +166,6 @@ app.get("/api/videos", async (req, res) => {
       return res.json({ videos: [] });
     }
 
-    // Fetch privacyStatus and clean snippet data directly from videos.list.
     const videosResp = await youtube.videos.list({
       part: ["snippet", "status"],
       id: videoIds,
@@ -173,6 +187,12 @@ app.get("/api/videos", async (req, res) => {
   }
 });
 
-app.listen(PORT, () => {
-  console.log(`YouTube private player running at http://localhost:${PORT}`);
-});
+// Export for Vercel Serverless Functions
+if (process.env.VERCEL) {
+  module.exports = app;
+} else {
+  // Local development
+  app.listen(PORT, () => {
+    console.log(`YouTube private player running at http://localhost:${PORT}`);
+  });
+}
