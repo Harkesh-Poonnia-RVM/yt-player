@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>YouTube Private Player</title>
+<style>
+  body { font-family: sans-serif; max-width: 900px; margin: 40px auto; padding: 0 16px; }
+  #connect-btn { padding: 10px 20px; font-size: 16px; cursor: pointer; }
+  #player-area { margin-bottom: 24px; }
+  #player-area iframe { width: 100%; max-width: 640px; height: 360px; border: none; }
+  #videos { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 16px; }
+  .video-card { cursor: pointer; border: 1px solid #ccc; border-radius: 6px; padding: 8px; }
+  .video-card img { width: 100%; border-radius: 4px; }
+  .video-card .title { font-size: 14px; font-weight: bold; margin: 6px 0 2px; }
+  .video-card .meta { font-size: 12px; color: #666; }
+  #error { color: red; white-space: pre-wrap; }
+</style>
+</head>
+<body>
+  <h1>YouTube Private Player (PoC)</h1>
+
+  <div id="connect-container" style="display:none;">
+    <button id="connect-btn">Connect YouTube</button>
+  </div>
+
+  <div id="app-container" style="display:none;">
+    <div id="player-area"></div>
+    <h2>Your uploaded videos</h2>
+    <div id="videos"></div>
+  </div>
+
+  <pre id="error"></pre>
+
+  <script>
+    const errorEl = document.getElementById('error');
+
+    function showError(msg) {
+      console.error(msg);
+      errorEl.textContent = typeof msg === 'string' ? msg : JSON.stringify(msg, null, 2);
+    }
+
+    function playVideo(videoId) {
+      const playerArea = document.getElementById('player-area');
+      playerArea.innerHTML = `
+        <iframe
+          src="https://www.youtube.com/embed/${encodeURIComponent(videoId)}"
+          title="YouTube video player"
+          allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+          allowfullscreen>
+        </iframe>`;
+      playerArea.scrollIntoView({ behavior: 'smooth' });
+    }
+
+    function renderVideos(videos) {
+      const container = document.getElementById('videos');
+      container.innerHTML = '';
+      videos.forEach((v) => {
+        const card = document.createElement('div');
+        card.className = 'video-card';
+        card.innerHTML = `
+          <img src="${v.thumbnail}" alt="${v.title}" />
+          <div class="title">${v.title}</div>
+          <div class="meta">ID: ${v.id}</div>
+          <div class="meta">Privacy: ${v.privacyStatus}</div>
+        `;
+        card.addEventListener('click', () => playVideo(v.id));
+        container.appendChild(card);
+      });
+    }
+
+    async function loadVideos() {
+      const resp = await fetch('/api/videos');
+      if (resp.status === 401) {
+        document.getElementById('connect-container').style.display = 'block';
+        document.getElementById('app-container').style.display = 'none';
+        return;
+      }
+      const data = await resp.json();
+      if (!resp.ok) {
+        showError(data.error || 'Failed to load videos');
+        return;
+      }
+      document.getElementById('connect-container').style.display = 'none';
+      document.getElementById('app-container').style.display = 'block';
+      renderVideos(data.videos);
+    }
+
+    document.getElementById('connect-btn').addEventListener('click', () => {
+      window.location.href = '/auth/youtube';
+    });
+
+    loadVideos().catch((err) => showError(err.message || String(err)));
+  </script>
+</body>
+</html>
