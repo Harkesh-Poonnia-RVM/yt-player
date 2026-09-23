@@ -1,8 +1,8 @@
 {
-  "buildCommand": "npm install",
   "functions": {
-    "server.js": {
-      "runtime": "nodejs20.x"
-    }
-  }
+    "server.js": {}
+  },
+  "rewrites": [
+    { "source": "/(.*)", "destination": "/server.js" }
+  ]
 }
