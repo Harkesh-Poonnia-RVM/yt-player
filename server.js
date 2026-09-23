@@ -24,6 +24,26 @@ function getCredentials() {
   throw new Error("Missing YouTube credentials");
 }
 
+// Load token from environment variable on Vercel (filesystem there is read-only)
+function getInitialToken() {
+  if (process.env.YOUTUBE_TOKEN) {
+    try {
+      return JSON.parse(process.env.YOUTUBE_TOKEN);
+    } catch (err) {
+      console.error("Could not parse YOUTUBE_TOKEN env var:", err.message);
+      return null;
+    }
+  }
+  if (fs.existsSync(TOKEN_PATH)) {
+    try {
+      return JSON.parse(fs.readFileSync(TOKEN_PATH, "utf-8"));
+    } catch (err) {
+      console.log("Could not load token file");
+    }
+  }
+  return null;
+}
+
 function resolveEnvPlaceholders(value) {
   if (Array.isArray(value)) {
     return value.map(resolveEnvPlaceholders);
@@ -60,24 +80,25 @@ const oauth2Client = new google.auth.OAuth2(
   redirectUri,
 );
 
-// Load token from cache or file
-if (fs.existsSync(TOKEN_PATH)) {
-  try {
-    tokenCache = JSON.parse(fs.readFileSync(TOKEN_PATH, "utf-8"));
-    oauth2Client.setCredentials(tokenCache);
-  } catch (err) {
-    console.log("Could not load token file");
-  }
+// Load token from env var (Vercel) or file (local)
+const initialToken = getInitialToken();
+if (initialToken) {
+  tokenCache = initialToken;
+  oauth2Client.setCredentials(tokenCache);
 }
 
 // Persist refreshed tokens
 oauth2Client.on("tokens", (tokens) => {
   tokenCache = { ...tokenCache, ...tokens };
-  // Try to save to file (works locally, ignored on Vercel)
-  try {
-    fs.writeFileSync(TOKEN_PATH, JSON.stringify(tokenCache, null, 2));
-  } catch (err) {
-    console.log("Token file write skipped (expected on Vercel)");
+  if (!process.env.VERCEL) {
+    // Save to file locally; filesystem on Vercel is read-only.
+    // On Vercel, update the YOUTUBE_TOKEN env var manually if the
+    // refresh token ever changes (it normally won't).
+    try {
+      fs.writeFileSync(TOKEN_PATH, JSON.stringify(tokenCache, null, 2));
+    } catch (err) {
+      console.log("Token file write skipped");
+    }
   }
 });
 
@@ -111,11 +132,19 @@ app.get("/oauth2callback", async (req, res) => {
     const { tokens } = await oauth2Client.getToken(code);
     oauth2Client.setCredentials(tokens);
     tokenCache = tokens;
-    // Try to persist
-    try {
-      fs.writeFileSync(TOKEN_PATH, JSON.stringify(tokens, null, 2));
-    } catch (err) {
-      console.log("Token persistence skipped");
+    if (process.env.VERCEL) {
+      // Filesystem is read-only on Vercel; the token only lives for this
+      // invocation. Log it so it can be copied into the YOUTUBE_TOKEN env var.
+      console.log(
+        "New token issued. Set this as the YOUTUBE_TOKEN env var on Vercel to persist it:",
+        JSON.stringify(tokens),
+      );
+    } else {
+      try {
+        fs.writeFileSync(TOKEN_PATH, JSON.stringify(tokens, null, 2));
+      } catch (err) {
+        console.log("Token persistence skipped");
+      }
     }
     res.redirect("/");
   } catch (err) {
@@ -171,14 +200,16 @@ app.get("/api/videos", async (req, res) => {
       id: videoIds,
     });
 
-    const videos = videosResp.data.items.map((v) => ({
-      id: v.id,
-      title: v.snippet.title,
-      thumbnail:
-        (v.snippet.thumbnails.medium && v.snippet.thumbnails.medium.url) ||
-        (v.snippet.thumbnails.default && v.snippet.thumbnails.default.url),
-      privacyStatus: v.status.privacyStatus,
-    }));
+    const videos = videosResp.data.items
+      .filter((v) => v.status.privacyStatus !== "public")
+      .map((v) => ({
+        id: v.id,
+        title: v.snippet.title,
+        thumbnail:
+          (v.snippet.thumbnails.medium && v.snippet.thumbnails.medium.url) ||
+          (v.snippet.thumbnails.default && v.snippet.thumbnails.default.url),
+        privacyStatus: v.status.privacyStatus,
+      }));
 
     res.json({ videos });
   } catch (err) {
