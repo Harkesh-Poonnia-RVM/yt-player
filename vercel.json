@@ -1,0 +1,8 @@
+{
+  "buildCommand": "npm install",
+  "functions": {
+    "server.js": {
+      "runtime": "nodejs"
+    }
+  }
+}

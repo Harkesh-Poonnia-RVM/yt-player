@@ -1,0 +1,15 @@
+{
+  "name": "youtube-private-player",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Minimal PoC: browse and play your own YouTube videos (including private) via YouTube Data API v3 + OAuth2",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "dotenv": "^18.0.2",
+    "express": "^4.19.2",
+    "googleapis": "^140.0.1"
+  }
+}

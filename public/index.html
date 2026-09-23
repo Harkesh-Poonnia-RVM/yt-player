@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>YouTube Private Player</title>
+<style>
+  body { font-family: sans-serif; max-width: 900px; margin: 40px auto; padding: 0 16px; }
+  #connect-btn { padding: 10px 20px; font-size: 16px; cursor: pointer; }
+  #player-area { margin-bottom: 24px; }
+  #player-area iframe { width: 100%; max-width: 640px; height: 360px; border: none; }
+  #videos { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 16px; }
+  .video-card { cursor: pointer; border: 1px solid #ccc; border-radius: 6px; padding: 8px; }
+  .video-card img { width: 100%; border-radius: 4px; }
+  .video-card .title { font-size: 14px; font-weight: bold; margin: 6px 0 2px; }
+  .video-card .meta { font-size: 12px; color: #666; }
+  #error { color: red; white-space: pre-wrap; }
+  .playing { border: 3px solid #ff0000; }
+</style>
+</head>
+<body>
+  <h1>YouTube Private Player (PoC)</h1>
+
+  <div id="connect-container" style="display:none;">
+    <button id="connect-btn">Connect YouTube</button>
+  </div>
+
+  <div id="app-container" style="display:none;">
+    <div id="player-area"></div>
+    <h2>Your uploaded videos</h2>
+    <div id="videos"></div>
+  </div>
+
+  <pre id="error"></pre>
+
+  <script src="https://www.youtube.com/iframe_api"></script>
+
+  <script>
+    const errorEl = document.getElementById('error');
+    let player = null;
+
+    function showError(msg) {
+      console.error(msg);
+      errorEl.textContent = typeof msg === 'string' ? msg : JSON.stringify(msg, null, 2);
+    }
+
+    // Initialize YouTube IFrame API
+    window.onYouTubeIframeAPIReady = function() {
+      console.log("YouTube IFrame API ready");
+    };
+
+    function playVideo(videoId, videoTitle) {
+      const playerArea = document.getElementById('player-area');
+      playerArea.innerHTML = `<div id="player-${videoId}"></div>`;
+      
+      if (player) {
+        player.destroy();
+      }
+
+      player = new YT.Player(`player-${videoId}`, {
+        height: '360',
+        width: '640',
+        videoId: videoId,
+        events: {
+          'onReady': onPlayerReady,
+          'onError': onPlayerError
+        }
+      });
+
+      playerArea.scrollIntoView({ behavior: 'smooth' });
+    }
+
+    function onPlayerReady(event) {
+      console.log("Player ready for video:", event.target.getVideoData().title);
+    }
+
+    function onPlayerError(event) {
+      const errorCode = event.data;
+      let errorMsg = '';
+      
+      if (errorCode === 2) {
+        errorMsg = '❌ Invalid video ID';
+      } else if (errorCode === 5) {
+        errorMsg = '❌ HTML5 player error';
+      } else if (errorCode === 100) {
+        errorMsg = '❌ Video not found (Private videos may not be playable via embed)';
+      } else if (errorCode === 101 || errorCode === 150) {
+        errorMsg = '❌ Video owner does not allow embedding. Try changing video privacy to "Unlisted"';
+      } else {
+        errorMsg = `❌ Player error: ${errorCode}`;
+      }
+      
+      showError(errorMsg);
+      console.error('Player error:', errorCode);
+    }
+
+    function renderVideos(videos) {
+      const container = document.getElementById('videos');
+      container.innerHTML = '';
+      videos.forEach((v) => {
+        const card = document.createElement('div');
+        card.className = 'video-card';
+        card.innerHTML = `
+          <img src="${v.thumbnail}" alt="${v.title}" />
+          <div class="title">${v.title}</div>
+          <div class="meta">ID: ${v.id}</div>
+          <div class="meta">Privacy: ${v.privacyStatus}</div>
+        `;
+        card.addEventListener('click', () => playVideo(v.id, v.title));
+        container.appendChild(card);
+      });
+    }
+
+    async function loadVideos() {
+      const resp = await fetch('/api/videos');
+      if (resp.status === 401) {
+        document.getElementById('connect-container').style.display = 'block';
+        document.getElementById('app-container').style.display = 'none';
+        return;
+      }
+      const data = await resp.json();
+      if (!resp.ok) {
+        showError(data.error || 'Failed to load videos');
+        return;
+      }
+      document.getElementById('connect-container').style.display = 'none';
+      document.getElementById('app-container').style.display = 'block';
+      renderVideos(data.videos);
+    }
+
+    document.getElementById('connect-btn').addEventListener('click', () => {
+      window.location.href = '/auth/youtube';
+    });
+
+    loadVideos().catch((err) => showError(err.message || String(err)));
+  </script>
+</body>
+</html>
